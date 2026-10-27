@@ -11,4 +11,4 @@ flexi_logger = { version = "0.31.10", features = ["colors"] }
 log = "0.4.34"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_with = "3.24.0"
-serde_yaml = "0.9.34"
+serde_yaml_ng = "0.10.0"

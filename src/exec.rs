@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::Command;
 
 use crate::config::{Config, Stack};
 
@@ -58,7 +59,15 @@ impl ExecOptions {
     }
 
     pub fn program(&self) -> &str {
-        self.binary.get(0).unwrap()
+        self.binary.first().unwrap()
+    }
+
+    pub fn command(&self) -> Command {
+        let mut command = Command::new(self.program());
+        command.args(self.args());
+        command.envs(self.environment.iter());
+        command.current_dir(&self.working_dir);
+        command
     }
 
     pub fn args(&self) -> Vec<&str> {

@@ -186,6 +186,21 @@ fn reverse<T>(stacks: Vec<T>) -> Vec<T> {
 }
 
 impl Commands {
+    /// Whether this command needs to know about dependencies between stacks.
+    pub fn uses_dependencies(&self) -> bool {
+        matches!(
+            self,
+            Commands::Create { .. }
+                | Commands::Down { .. }
+                | Commands::Kill { .. }
+                | Commands::Pause { .. }
+                | Commands::Restart { .. }
+                | Commands::Rm { .. }
+                | Commands::Unpause { .. }
+                | Commands::Up { .. }
+        )
+    }
+
     pub fn run(&self, globals: &GlobalArguments, config: &Config) -> Result<(), String> {
         match self {
             Commands::Build { args } => {

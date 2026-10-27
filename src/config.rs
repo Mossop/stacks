@@ -1,4 +1,6 @@
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -6,6 +8,8 @@ use serde::de::{self, Error, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_with::formats::SpaceSeparator;
 use serde_with::{serde_as, StringWithSeparator};
+
+use crate::infer;
 
 fn deserialize_file<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
 where
@@ -53,6 +57,37 @@ where
     deserializer.deserialize_any(FileVisitor {})
 }
 
+/// How a dependency between two stacks came to be known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DependencyKind {
+    /// Listed in `depends_on` in the stacks config.
+    Explicit,
+    /// Inferred from the docker compose configuration.
+    Inferred,
+}
+
+impl fmt::Display for DependencyKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DependencyKind::Explicit => f.write_str("explicit"),
+            DependencyKind::Inferred => f.write_str("inferred"),
+        }
+    }
+}
+
+fn deserialize_dependencies<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, DependencyKind>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let keys: BTreeSet<String> = BTreeSet::deserialize(deserializer)?;
+    Ok(keys
+        .into_iter()
+        .map(|key| (key, DependencyKind::Explicit))
+        .collect())
+}
+
 #[serde_as]
 #[derive(Deserialize, Eq)]
 pub struct Stack {
@@ -63,8 +98,12 @@ pub struct Stack {
     pub directory: Option<String>,
     #[serde(default, deserialize_with = "deserialize_file")]
     pub file: Option<Vec<String>>,
-    #[serde(default, rename = "depends_on")]
-    pub dependencies: BTreeSet<String>,
+    #[serde(
+        default,
+        rename = "depends_on",
+        deserialize_with = "deserialize_dependencies"
+    )]
+    pub dependencies: BTreeMap<String, DependencyKind>,
     #[serde(skip)]
     pub dependants: BTreeSet<String>,
     #[serde(default)]
@@ -87,27 +126,46 @@ impl PartialEq for Stack {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_command() -> Vec<String> {
     vec!["docker".to_string(), "compose".to_string()]
+}
+
+/// Describes the dependency cycle formed by `path` followed by `dep`.
+fn cycle_error(stacks: &BTreeMap<String, Stack>, path: &[String], dep: &str) -> String {
+    let start = path.iter().position(|key| key == dep).unwrap();
+    let cycle: Vec<&String> = path[start..].iter().chain(path.get(start)).collect();
+
+    let links: Vec<String> = cycle
+        .windows(2)
+        .map(|pair| {
+            format!(
+                "\"{}\" depends on \"{}\" ({})",
+                pair[0], pair[1], stacks[pair[0]].dependencies[pair[1]]
+            )
+        })
+        .collect();
+
+    format!("invalid dependency cycle: {}", links.join(", "))
 }
 
 fn check_dependencies(
     stack: &Stack,
     stacks: &BTreeMap<String, Stack>,
-    seen: &mut HashSet<String>,
+    path: &mut Vec<String>,
 ) -> Result<(), String> {
-    seen.insert(stack.key.clone());
+    path.push(stack.key.clone());
 
-    for dep in stack.dependencies.iter() {
-        if seen.contains(dep) {
-            return Err(format!(
-                "invalid dependency cycle: \"{}\" cannot depend on \"{}\"",
-                stack.key, dep
-            ));
+    for dep in stack.dependencies.keys() {
+        if path.contains(dep) {
+            return Err(cycle_error(stacks, path, dep));
         }
 
         if let Some(inner) = stacks.get(dep) {
-            check_dependencies(inner, stacks, seen)?;
+            check_dependencies(inner, stacks, path)?;
         } else {
             return Err(format!(
                 "invalid dependency: \"{}\" is not a known stack",
@@ -116,7 +174,7 @@ fn check_dependencies(
         }
     }
 
-    seen.remove(&stack.key);
+    path.pop();
 
     Ok(())
 }
@@ -134,20 +192,31 @@ where
         }
     }
 
+    link_stacks(&mut stacks).map_err(D::Error::custom)?;
+
+    Ok(stacks)
+}
+
+/// Validates the dependencies of every stack and fills in their dependants.
+fn link_stacks(stacks: &mut BTreeMap<String, Stack>) -> Result<(), String> {
+    for stack in stacks.values_mut() {
+        stack.dependants.clear();
+    }
+
     let keys: Vec<String> = stacks.keys().cloned().collect();
-    let mut seen = HashSet::new();
+    let mut path = Vec::new();
     for key in keys {
         let stack = stacks.get(&key).unwrap();
-        check_dependencies(stack, &stacks, &mut seen).map_err(D::Error::custom)?;
+        check_dependencies(stack, stacks, &mut path)?;
 
-        let dependencies = stack.dependencies.clone();
+        let dependencies: Vec<String> = stack.dependencies.keys().cloned().collect();
         for dep in dependencies {
             let stack = stacks.get_mut(&dep).unwrap();
             stack.dependants.insert(key.clone());
         }
     }
 
-    Ok(stacks)
+    Ok(())
 }
 
 #[serde_as]
@@ -162,12 +231,14 @@ pub struct Config {
     pub stacks: BTreeMap<String, Stack>,
     #[serde(default)]
     pub environment: HashMap<String, String>,
+    #[serde(default = "default_true")]
+    pub infer_dependencies: bool,
 }
 
 fn add_dependencies(stacks: &BTreeMap<String, Stack>, stack: &str, keys: &mut BTreeSet<String>) {
     let stack = stacks.get(stack).unwrap();
 
-    for dep in stack.dependencies.iter() {
+    for dep in stack.dependencies.keys() {
         if keys.contains(dep) {
             continue;
         }
@@ -232,6 +303,35 @@ impl Config {
         Ok(config)
     }
 
+    /// Adds dependencies inferred from the docker compose configuration of
+    /// each stack, if enabled.
+    pub fn add_inferred_dependencies(&mut self) -> Result<(), String> {
+        if !self.infer_dependencies {
+            return Ok(());
+        }
+
+        let inferred = infer::infer_config_dependencies(self);
+        self.add_dependencies(inferred)
+    }
+
+    fn add_dependencies(
+        &mut self,
+        inferred: BTreeMap<String, BTreeSet<String>>,
+    ) -> Result<(), String> {
+        for (key, deps) in inferred {
+            for dep in deps {
+                // A dependency that is both explicit and inferred stays explicit.
+                let stack = self.stacks.get_mut(&key).unwrap();
+                if let Entry::Vacant(entry) = stack.dependencies.entry(dep) {
+                    log::debug!("Inferred dependency of \"{}\" on \"{}\"", key, entry.key());
+                    entry.insert(DependencyKind::Inferred);
+                }
+            }
+        }
+
+        link_stacks(&mut self.stacks)
+    }
+
     pub fn stacks_with_dependencies<I, S>(&self, list: I) -> Result<Vec<&Stack>, String>
     where
         I: IntoIterator<Item = S>,
@@ -262,7 +362,7 @@ impl Config {
                 let stack = self.stacks.get(key).unwrap();
                 if stack
                     .dependencies
-                    .iter()
+                    .keys()
                     .all(|dep: &String| added.contains(dep) || !keys.contains(dep))
                 {
                     // All dependencies we care about are resolved so this stack
@@ -348,6 +448,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::{Config, Stack};
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
 
     fn from_str(s: &str) -> Result<Config, String> {
@@ -459,7 +560,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             &error,
-            "invalid dependency cycle: \"foo\" cannot depend on \"baz\" at line 2 column 13"
+            "invalid dependency cycle: \"baz\" depends on \"foo\" (explicit), \"foo\" depends on \"baz\" (explicit) at line 2 column 13"
         );
 
         let error = from_str(
@@ -480,7 +581,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             &error,
-            "invalid dependency cycle: \"foo\" cannot depend on \"bar\" at line 2 column 13"
+            "invalid dependency cycle: \"bar\" depends on \"baz\" (explicit), \"baz\" depends on \"foo\" (explicit), \"foo\" depends on \"bar\" (explicit) at line 2 column 13"
         );
 
         let config = from_str(
@@ -513,5 +614,67 @@ mod tests {
 
         let stacks = keys(config.stacks(["bar"]).unwrap());
         assert_eq!(stacks, vec!["bar".to_string()]);
+    }
+
+    fn inferred(list: &[(&str, &[&str])]) -> BTreeMap<String, BTreeSet<String>> {
+        list.iter()
+            .map(|(key, deps)| {
+                (
+                    key.to_string(),
+                    deps.iter().map(|d| d.to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn inferred_dependencies() {
+        let mut config = from_str(
+            "
+            stacks:
+                foo:
+                    depends_on:
+                        - bar
+                bar: {}
+                baz: {}
+            ",
+        )
+        .unwrap();
+        assert!(config.infer_dependencies);
+
+        config
+            .add_dependencies(inferred(&[("foo", &["bar"]), ("bar", &["baz"])]))
+            .unwrap();
+
+        let stacks = keys(config.stacks_with_dependencies(["foo"]).unwrap());
+        assert_eq!(
+            stacks,
+            vec!["baz".to_string(), "bar".to_string(), "foo".to_string()]
+        );
+        let stacks = keys(config.stacks_with_dependants(["baz"]).unwrap());
+        assert_eq!(
+            stacks,
+            vec!["baz".to_string(), "bar".to_string(), "foo".to_string()]
+        );
+
+        // Inferred dependencies that would create a cycle are an error. The
+        // error shows that "foo" on "bar" stays explicit despite being inferred.
+        assert_eq!(
+            config
+                .add_dependencies(inferred(&[("baz", &["foo"])]))
+                .err()
+                .unwrap(),
+            "invalid dependency cycle: \"bar\" depends on \"baz\" (inferred), \"baz\" depends on \"foo\" (inferred), \"foo\" depends on \"bar\" (explicit)"
+        );
+
+        let config = from_str(
+            "
+            infer_dependencies: false
+            stacks:
+                foo: {}
+            ",
+        )
+        .unwrap();
+        assert!(!config.infer_dependencies);
     }
 }

@@ -199,7 +199,7 @@ pub fn infer_config_dependencies(config: &Config) -> BTreeMap<String, BTreeSet<S
             .filter_map(|(stack, handle)| match handle.join() {
                 Ok(Ok(project)) => Some((stack.key.clone(), project)),
                 Ok(Err(e)) => {
-                    log::warn!(
+                    tracing::warn!(
                         "Unable to infer dependencies for stack \"{}\": {}",
                         stack.key,
                         e

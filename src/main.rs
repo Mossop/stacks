@@ -7,7 +7,11 @@ mod program;
 use std::{env::current_dir, fs::File, path::PathBuf};
 
 use clap::Parser;
-use flexi_logger::{LevelFilter, LogSpecBuilder, Logger};
+use tracing_subscriber::{
+    filter::{LevelFilter, Targets},
+    fmt,
+    prelude::*,
+};
 
 use program::Program;
 
@@ -60,17 +64,17 @@ fn stacks_file(file: &Option<String>) -> Result<PathBuf, String> {
 fn run() -> Result<(), String> {
     let args = Program::parse();
 
-    Logger::with(
-        LogSpecBuilder::new()
-            .default(LevelFilter::Error)
-            .module("stack", args.verbose.log_level_filter())
-            .build(),
-    )
-    .start()
-    .unwrap();
+    tracing_subscriber::registry()
+        .with(fmt::layer().without_time().with_writer(std::io::stderr))
+        .with(
+            Targets::new()
+                .with_default(LevelFilter::ERROR)
+                .with_target("stacks", args.verbose.tracing_level_filter()),
+        )
+        .init();
 
     let stacks_file = stacks_file(&args.file)?;
-    log::debug!("Loading stacks from {}", stacks_file.display());
+    tracing::debug!("Loading stacks from {}", stacks_file.display());
     let f = File::open(&stacks_file)
         .map_err(|e| format!("Failed to open file {}: {}", stacks_file.display(), e))?;
 

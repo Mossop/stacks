@@ -3,8 +3,6 @@ use crate::{
     exec::ExecOptions,
 };
 
-use std::process::Command;
-
 fn exec(exec_options: &ExecOptions, stack: &Stack) -> Result<(), String> {
     let exec_options = exec_options.with_stack(stack);
 
@@ -14,14 +12,8 @@ fn exec(exec_options: &ExecOptions, stack: &Stack) -> Result<(), String> {
         exec_options.args().join(" ")
     );
 
-    let mut command = Command::new(exec_options.program());
-    command.args(exec_options.args());
-    for (k, v) in exec_options.environment.iter() {
-        command.env(k, v);
-    }
-
-    command.current_dir(&exec_options.working_dir);
-    let mut child = command
+    let mut child = exec_options
+        .command()
         .spawn()
         .map_err(|e| format!("Error running docker compose: {}", e))?;
     let status = child

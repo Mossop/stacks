@@ -11,7 +11,8 @@ each project is a self-contained unit not depending on any other project. In
 reality projects can reference and depend on networks and containers defined in
 other projects. Stacks lets you define those dependencies such that when
 attempting to bring up one project it ensures that the other projects that it
-requires are up.
+requires are up. Many of these dependencies can also be inferred automatically
+(see [Inferred dependencies](#inferred-dependencies)).
 
 ## Commands
 
@@ -58,6 +59,8 @@ A few global properties can be set:
 * `command`: The path used to invoke docker compose. Defaults to
 `docker compose` but in some cases you may want to set this to `docker-compose`
 or provide an absolute path in case docker is not in the `PATH`.
+* `infer_dependencies`: Whether to infer dependencies between stacks from their
+compose configuration. Defaults to `true`.
 
 The key for each stack in the configuration file is its default name and acts as
 the default project directory. The following properties may be set for each
@@ -72,3 +75,23 @@ stack config, defaults the same logic that docker compose uses.
 * `depends_on`: A list of the stacks that this stack depends on.
 * `environment`: a dictionary to define environment variables. This allows a
 certain amount of customisation of the stack.
+
+## Inferred dependencies
+
+In addition to those listed in `depends_on`, stacks infers dependencies by
+running `docker compose config` for every stack. A stack depends on another
+stack when it references something that the other stack creates:
+
+* An external network (`external: true`) whose name matches a network defined
+by the other stack.
+* An external volume whose name matches a volume defined by the other stack.
+* A container, via `network_mode: container:<name>`,
+`volumes_from: container:<name>` or `external_links`, whose name matches one
+of the other stack's containers (either its `container_name` or the default
+`<project>-<service>-1`).
+
+Inference only happens for commands where ordering matters (`up`, `down`,
+`restart`, etc.). Stacks whose configuration cannot be loaded are skipped with a
+warning. A dependency cycle, whether inferred or explicit, is an error. Note
+that docker compose omits networks and volumes that no service uses, so those
+can't be inferred. Set `infer_dependencies: false` to disable inference entirely.

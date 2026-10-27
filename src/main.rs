@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod exec;
+mod infer;
 mod program;
 
 use std::{env::current_dir, fs::File, path::PathBuf};
@@ -73,7 +74,10 @@ fn run() -> Result<(), String> {
     let f = File::open(&stacks_file)
         .map_err(|e| format!("Failed to open file {}: {}", stacks_file.display(), e))?;
 
-    let config = Config::from_reader(stacks_file.parent().unwrap(), f)?;
+    let mut config = Config::from_reader(stacks_file.parent().unwrap(), f)?;
+    if args.command.uses_dependencies() {
+        config.add_inferred_dependencies()?;
+    }
 
     args.command.run(&args.globals, &config)
 }

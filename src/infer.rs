@@ -72,7 +72,7 @@ fn container_reference(reference: &str) -> Option<String> {
 
 impl ComposeProject {
     pub fn parse(yaml: &[u8]) -> Result<Self, String> {
-        serde_yaml::from_slice(yaml).map_err(|e| e.to_string())
+        serde_yaml_ng::from_slice(yaml).map_err(|e| e.to_string())
     }
 
     fn resource_name(key: &str, resource: &Resource) -> String {

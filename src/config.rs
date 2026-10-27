@@ -298,7 +298,7 @@ impl Config {
     }
 
     pub fn from_reader<R: Read>(base_dir: &Path, reader: R) -> Result<Self, String> {
-        let mut config: Config = serde_yaml::from_reader(reader).map_err(|e| e.to_string())?;
+        let mut config: Config = serde_yaml_ng::from_reader(reader).map_err(|e| e.to_string())?;
         config.base_dir = base_dir.to_owned();
         Ok(config)
     }

@@ -6,7 +6,7 @@ use crate::{
 fn exec(exec_options: &ExecOptions, stack: &Stack) -> Result<(), String> {
     let exec_options = exec_options.with_stack(stack);
 
-    log::debug!(
+    tracing::debug!(
         "Executing `{} {}`",
         exec_options.program(),
         exec_options.args().join(" ")
@@ -38,7 +38,7 @@ pub fn run_against_stacks(
     stacks: &Vec<&Stack>,
     args: &Vec<String>,
 ) -> Result<(), String> {
-    log::trace!(
+    tracing::trace!(
         "Executing command `{}` against {} stacks with arguments {:?}",
         command,
         stacks

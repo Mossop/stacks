@@ -322,9 +322,22 @@ impl Config {
             for dep in deps {
                 // A dependency that is both explicit and inferred stays explicit.
                 let stack = self.stacks.get_mut(&key).unwrap();
-                if let Entry::Vacant(entry) = stack.dependencies.entry(dep) {
-                    tracing::debug!("Inferred dependency of \"{}\" on \"{}\"", key, entry.key());
-                    entry.insert(DependencyKind::Inferred);
+                match stack.dependencies.entry(dep) {
+                    Entry::Vacant(entry) => {
+                        tracing::debug!(
+                            "Inferred dependency of \"{}\" on \"{}\"",
+                            key,
+                            entry.key()
+                        );
+                        entry.insert(DependencyKind::Inferred);
+                    }
+                    Entry::Occupied(entry) => {
+                        tracing::info!(
+                            "Explicit dependency of \"{}\" on \"{}\" can be inferred and could be removed",
+                            key,
+                            entry.key()
+                        );
+                    }
                 }
             }
         }

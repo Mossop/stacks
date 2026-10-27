@@ -14,49 +14,38 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-20.04
+          - runner: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact: stacks-linux.tar.bz2
-          - runner: macos-12
+          - runner: macos-latest
             target: x86_64-apple-darwin
             artifact: stacks-mac-x86_64.tar.bz2
-          - runner: macos-12
+          - runner: macos-latest
             target: aarch64-apple-darwin
             artifact: stacks-mac-aarch64.tar.bz2
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Setup build cache
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+        uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
+          targets: ${{ matrix.target }}
+
+      - name: Setup build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Compress
         run: tar -cjf ${{ matrix.artifact }} -C target/${{ matrix.target }}/release stacks
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
 
         with:
           name: ${{ matrix.artifact }}
@@ -64,17 +53,17 @@ jobs:
 
   combine:
     needs: build
-    runs-on: macos-12
+    runs-on: macos-latest
 
     steps:
       - name: Download x86_64
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v8
 
         with:
           name: stacks-mac-x86_64.tar.bz2
 
       - name: Download arm64
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v8
 
         with:
           name: stacks-mac-aarch64.tar.bz2
@@ -83,7 +72,7 @@ jobs:
         run: tar -xjf stacks-mac-x86_64.tar.bz2 && mv stacks stacks-x86_64 && tar -xjf stacks-mac-aarch64.tar.bz2 && mv stacks stacks-aarch64 && lipo stacks-x86_64 stacks-aarch64 -create -output stacks && tar -cjf stacks-mac.tar.bz2 stacks
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
 
         with:
           name: stacks-mac.tar.bz2
@@ -95,7 +84,7 @@ jobs:
 
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v8
 
         with:
           path: artifacts

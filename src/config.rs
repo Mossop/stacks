@@ -473,7 +473,7 @@ mod tests {
 
         let stacks = config.stacks(["foo", "bar"]).unwrap();
         assert_eq!(stacks.len(), 2);
-        let stack = stacks.get(0).unwrap();
+        let stack = stacks.first().unwrap();
         assert_eq!(stack.name, "bar");
         let stack = stacks.get(1).unwrap();
         assert_eq!(stack.name, "baz");

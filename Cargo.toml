@@ -14,3 +14,7 @@ serde_with = "3.24.0"
 serde_yaml_ng = "0.10.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "fmt", "smallvec", "std"] }
+
+[dev-dependencies]
+reqwest = { version = "0.13.5", features = ["blocking", "json", "multipart"] }
+testcontainers = { version = "0.28.0", features = ["blocking", "http_wait"] }

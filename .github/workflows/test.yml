@@ -33,3 +33,9 @@ jobs:
 
       - name: Run tests
         run: cargo test --all-features
+
+      - name: Pull Portainer test images
+        run: docker pull portainer/portainer-ce:2.45.3 && docker pull busybox
+
+      - name: Run Portainer tests
+        run: cargo test --all-features --test portainer -- --ignored

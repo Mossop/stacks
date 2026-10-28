@@ -138,3 +138,10 @@ deployment fails before anything is deployed.
 machine running stacks, which must also exist on the Portainer environment.
 * Environment values, including any secrets, are stored in the compose file
 held by Portainer.
+
+## Development
+
+The tests for `deploy` start a real Portainer instance with
+[testcontainers](https://crates.io/crates/testcontainers) and deploy stacks to
+the local Docker daemon. They are skipped by default; run them with
+`cargo test --test portainer -- --ignored`.

@@ -37,6 +37,9 @@ compose or slightly modified versions of those in docker compose:
 * `stack <stacks> update <args>`: Pulls new images and recreates any required
 stacks. Equivalent to calling `docker compose pull` and then
 `docker compose up --wait` for all the required stacks.
+* `stack <stacks> deploy [--pull] [--timeout <seconds>]`: Creates or updates the
+given stacks and their dependencies through [Portainer](#portainer), waiting for
+each to be running and healthy before moving on to the next.
 
 ## Configuration
 
@@ -61,6 +64,7 @@ A few global properties can be set:
 or provide an absolute path in case docker is not in the `PATH`.
 * `infer_dependencies`: Whether to infer dependencies between stacks from their
 compose configuration. Defaults to `true`.
+* `portainer`: Configuration for the `deploy` command, see [Portainer](#portainer).
 
 The key for each stack in the configuration file is its default name and acts as
 the default project directory. The following properties may be set for each
@@ -95,3 +99,49 @@ Inference only happens for commands where ordering matters (`up`, `down`,
 warning. A dependency cycle, whether inferred or explicit, is an error. Note
 that docker compose omits networks and volumes that no service uses, so those
 can't be inferred. Set `infer_dependencies: false` to disable inference entirely.
+
+## Portainer
+
+Rather than running docker compose directly, `stacks deploy` deploys stacks
+through the [Portainer](https://www.portainer.io/) API so that Portainer has full
+control of them. It needs a `portainer` section in the configuration:
+
+```yaml
+portainer:
+  url: https://portainer.example.com
+  endpoint: local
+  timeout: 300
+```
+
+* `url`: The base URL of the Portainer instance.
+* `endpoint`: The name or numeric id of the Portainer environment that all
+stacks are deployed to.
+* `timeout`: How long in seconds to wait for each stack to become healthy.
+Defaults to 300 and can be overridden with `--timeout`.
+
+An access token must be provided with `--token` or the `PORTAINER_TOKEN`
+environment variable.
+
+Each stack is created in Portainer if it doesn't already exist, otherwise it is
+updated (and started if it was stopped). Pass `--pull` to pull the latest images
+when updating. After deploying a stack, stacks waits until all of its containers
+are running and healthy, or have exited successfully, before deploying the next.
+An unhealthy container or one that exits with an error stops the deployment.
+
+The compose file sent to Portainer is the output of `docker compose config`, so
+multiple compose files, environment variables and `env_file`s are resolved
+locally. This has a few consequences:
+
+* Services that use `build` are not supported. If any stack contains one the
+deployment fails before anything is deployed.
+* Relative paths, such as bind mounts, are resolved to absolute paths on the
+machine running stacks, which must also exist on the Portainer environment.
+* Environment values, including any secrets, are stored in the compose file
+held by Portainer.
+
+## Development
+
+The tests for `deploy` start a real Portainer instance with
+[testcontainers](https://crates.io/crates/testcontainers) and deploy stacks to
+the local Docker daemon. They are skipped by default; run them with
+`cargo test --test portainer -- --ignored`.

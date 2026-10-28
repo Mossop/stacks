@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod exec;
 mod infer;
+mod portainer;
 mod program;
 
 use std::{env::current_dir, fs::File, path::PathBuf};
@@ -89,5 +90,6 @@ fn run() -> Result<(), String> {
 fn main() {
     if let Err(e) = run() {
         eprintln!("{}", e);
+        std::process::exit(1);
     }
 }

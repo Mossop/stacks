@@ -27,6 +27,7 @@ struct Service {
     volumes_from: Vec<String>,
     #[serde(default)]
     external_links: Vec<String>,
+    build: Option<serde_yaml_ng::Value>,
 }
 
 /// The parts of the output of `docker compose config` that we care about.
@@ -73,6 +74,16 @@ fn container_reference(reference: &str) -> Option<String> {
 impl ComposeProject {
     pub fn parse(yaml: &[u8]) -> Result<Self, String> {
         serde_yaml_ng::from_slice(yaml).map_err(|e| e.to_string())
+    }
+
+    /// The names of any services that are built from source rather than
+    /// using a pre-built image.
+    pub fn built_services(&self) -> Vec<&str> {
+        self.services
+            .iter()
+            .filter(|(_, service)| service.build.is_some())
+            .map(|(key, _)| key.as_str())
+            .collect()
     }
 
     fn resource_name(key: &str, resource: &Resource) -> String {
@@ -172,16 +183,22 @@ pub fn infer_dependencies(
     dependencies
 }
 
-fn load_project(config: &Config, stack: &Stack) -> Result<ComposeProject, String> {
+/// Runs `docker compose config` for the stack returning the resolved
+/// configuration.
+pub fn compose_config(config: &Config, stack: &Stack) -> Result<Vec<u8>, String> {
     let exec_options = ExecOptions::new(config, "config", &[] as &[&str]).with_stack(stack);
 
     let output = exec_options.command().output().map_err(|e| e.to_string())?;
 
     if output.status.success() {
-        ComposeProject::parse(&output.stdout)
+        Ok(output.stdout)
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
     }
+}
+
+fn load_project(config: &Config, stack: &Stack) -> Result<ComposeProject, String> {
+    ComposeProject::parse(&compose_config(config, stack)?)
 }
 
 /// Runs `docker compose config` for every stack and infers dependencies from
@@ -406,5 +423,25 @@ mod tests {
         )]);
 
         assert_eq!(infer_dependencies(&projects), deps(&[]));
+    }
+
+    #[test]
+    fn built_services() {
+        let project = ComposeProject::parse(
+            b"
+            name: app
+            services:
+                app:
+                    build:
+                        context: .
+                db:
+                    image: postgres
+                worker:
+                    build: ./worker
+            ",
+        )
+        .unwrap();
+
+        assert_eq!(project.built_services(), vec!["app", "worker"]);
     }
 }

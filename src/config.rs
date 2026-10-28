@@ -219,6 +219,38 @@ fn link_stacks(stacks: &mut BTreeMap<String, Stack>) -> Result<(), String> {
     Ok(())
 }
 
+/// Identifies a Portainer environment either by its id or its name.
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum Endpoint {
+    Id(u64),
+    Name(String),
+}
+
+impl fmt::Display for Endpoint {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Endpoint::Id(id) => write!(f, "{}", id),
+            Endpoint::Name(name) => f.write_str(name),
+        }
+    }
+}
+
+fn default_timeout() -> u64 {
+    300
+}
+
+#[derive(Deserialize, Debug)]
+pub struct PortainerConfig {
+    /// The base URL of the Portainer instance.
+    pub url: String,
+    /// The environment to deploy stacks to.
+    pub endpoint: Endpoint,
+    /// How long to wait in seconds for a stack to become healthy.
+    #[serde(default = "default_timeout")]
+    pub timeout: u64,
+}
+
 #[serde_as]
 #[derive(Deserialize)]
 pub struct Config {
@@ -233,6 +265,7 @@ pub struct Config {
     pub environment: HashMap<String, String>,
     #[serde(default = "default_true")]
     pub infer_dependencies: bool,
+    pub portainer: Option<PortainerConfig>,
 }
 
 fn add_dependencies(stacks: &BTreeMap<String, Stack>, stack: &str, keys: &mut BTreeSet<String>) {
@@ -460,7 +493,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, Stack};
+    use super::{Config, Endpoint, Stack};
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
 
@@ -689,5 +722,43 @@ mod tests {
         )
         .unwrap();
         assert!(!config.infer_dependencies);
+    }
+
+    #[test]
+    fn portainer() {
+        let config = from_str(
+            "
+            stacks:
+                foo: {}
+            ",
+        )
+        .unwrap();
+        assert!(config.portainer.is_none());
+
+        let config = from_str(
+            "
+            portainer:
+                url: https://portainer.example.com
+                endpoint: 3
+            ",
+        )
+        .unwrap();
+        let portainer = config.portainer.unwrap();
+        assert_eq!(portainer.url, "https://portainer.example.com");
+        assert_eq!(portainer.endpoint, Endpoint::Id(3));
+        assert_eq!(portainer.timeout, 300);
+
+        let config = from_str(
+            "
+            portainer:
+                url: https://portainer.example.com
+                endpoint: local
+                timeout: 60
+            ",
+        )
+        .unwrap();
+        let portainer = config.portainer.unwrap();
+        assert_eq!(portainer.endpoint, Endpoint::Name("local".to_string()));
+        assert_eq!(portainer.timeout, 60);
     }
 }

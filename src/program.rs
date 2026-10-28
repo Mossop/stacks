@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use clap::{Args, Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 
-use crate::{commands::run_against_stacks, config::Config};
+use crate::{
+    commands::{deploy_stacks, run_against_stacks},
+    config::Config,
+};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None, subcommand_precedence_over_arg(true))]
@@ -64,6 +67,18 @@ pub enum Commands {
         /// Arguments to pass through to docker compose
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+    /// Create or update stacks through Portainer, waiting for each to be healthy
+    Deploy {
+        /// The Portainer access token
+        #[arg(long, env = "PORTAINER_TOKEN", hide_env_values = true)]
+        token: String,
+        /// Pull the latest images when updating existing stacks
+        #[arg(long)]
+        pull: bool,
+        /// Seconds to wait for each stack to become healthy, overrides the config
+        #[arg(long)]
+        timeout: Option<u64>,
     },
     /// Stop and remove containers, networks
     Down {
@@ -191,6 +206,7 @@ impl Commands {
         matches!(
             self,
             Commands::Create { .. }
+                | Commands::Deploy { .. }
                 | Commands::Down { .. }
                 | Commands::Kill { .. }
                 | Commands::Pause { .. }
@@ -214,6 +230,14 @@ impl Commands {
             Commands::Create { args } => {
                 let stacks = config.stacks_with_dependencies(globals.stacks())?;
                 run_against_stacks("create", config, &stacks, args)
+            }
+            Commands::Deploy {
+                token,
+                pull,
+                timeout,
+            } => {
+                let stacks = config.stacks_with_dependencies(globals.stacks())?;
+                deploy_stacks(config, &stacks, token, *pull, *timeout)
             }
             Commands::Down { args } => {
                 let stacks = reverse(config.stacks_with_dependants(globals.stacks())?);

@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod exec;
 mod infer;
+mod portainer;
 mod program;
 
 use std::{env::current_dir, fs::File, path::PathBuf};

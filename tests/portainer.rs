@@ -3,6 +3,7 @@
 //! `cargo test --test portainer -- --ignored`.
 
 use std::{
+    collections::BTreeSet,
     fs,
     path::PathBuf,
     process::{self, Command, Output},
@@ -155,6 +156,30 @@ impl Portainer {
             self.endpoint_id, name
         ))
     }
+
+    /// Lists the compose projects of every container created from the
+    /// fixture's services, whichever project or stack they belong to.
+    fn compose_projects(&self, fixture: &Fixture) -> BTreeSet<String> {
+        let filters = json!({
+            "label": [format!("stacks.test={}", fixture.prefix)]
+        })
+        .to_string();
+
+        self.get_with(
+            &format!("endpoints/{}/docker/containers/json", self.endpoint_id),
+            &[("all", "1"), ("filters", &filters)],
+        )
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|container| {
+            container["Labels"]["com.docker.compose.project"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+    }
 }
 
 impl Drop for Portainer {
@@ -275,26 +300,32 @@ impl Drop for Fixture {
     }
 }
 
-/// A busybox service that becomes healthy after `delay` seconds, or never if
-/// `delay` is `None`.
-fn service(name: &str, delay: Option<u32>) -> String {
-    let (command, retries) = match delay {
-        Some(delay) => (format!("sleep {} && touch /ok && sleep 3600", delay), 60),
-        None => ("sleep 3600".to_string(), 2),
-    };
+impl Fixture {
+    /// A busybox service that becomes healthy after `delay` seconds, or never
+    /// if `delay` is `None`. Its containers are labelled with this fixture's
+    /// prefix so they can be found whatever compose project they end up in.
+    fn service(&self, name: &str, delay: Option<u32>) -> String {
+        let (command, retries) = match delay {
+            Some(delay) => (format!("sleep {} && touch /ok && sleep 3600", delay), 60),
+            None => ("sleep 3600".to_string(), 2),
+        };
+        let prefix = &self.prefix;
 
-    format!(
-        r#"
+        format!(
+            r#"
   {name}:
     image: busybox
     command: ["sh", "-c", "{command}"]
     stop_signal: SIGKILL
+    labels:
+      stacks.test: {prefix}
     healthcheck:
       test: ["CMD", "test", "-f", "/ok"]
       interval: 1s
       retries: {retries}
 "#
-    )
+        )
+    }
 }
 
 /// Writes a `net` stack that creates the shared network and an `app` stack
@@ -304,7 +335,7 @@ fn dependent_stacks(fixture: &Fixture, net_delay: Option<u32>) {
         "net",
         &format!(
             "services:{}networks:\n  default:\n    name: {}\n",
-            service("hub", net_delay),
+            fixture.service("hub", net_delay),
             fixture.network()
         ),
     );
@@ -312,7 +343,7 @@ fn dependent_stacks(fixture: &Fixture, net_delay: Option<u32>) {
         "app",
         &format!(
             "services:{}networks:\n  default:\n    name: {}\n    external: true\n",
-            service("web", Some(0)),
+            fixture.service("web", Some(0)),
             fixture.network()
         ),
     );
@@ -400,7 +431,10 @@ fn deploy_starts_stopped_stack() {
     let portainer = Portainer::start();
     let fixture = Fixture::new();
     fixture.config(&portainer, "local", &["app"]);
-    fixture.compose("app", &format!("services:{}", service("web", Some(0))));
+    fixture.compose(
+        "app",
+        &format!("services:{}", fixture.service("web", Some(0))),
+    );
 
     assert_success(&fixture.run(&portainer, &["deploy"]));
 
@@ -462,7 +496,7 @@ fn build_is_rejected_before_deploying() {
         "app",
         &format!(
             "services:{}  builder:\n    build: .\nnetworks:\n  default:\n    name: {}\n    external: true\n",
-            service("web", Some(0)),
+            fixture.service("web", Some(0)),
             fixture.network()
         ),
     );
@@ -480,7 +514,10 @@ fn build_is_rejected_before_deploying() {
 fn endpoint_by_id_and_unknown_endpoint() {
     let portainer = Portainer::start();
     let fixture = Fixture::new();
-    fixture.compose("app", &format!("services:{}", service("web", Some(0))));
+    fixture.compose(
+        "app",
+        &format!("services:{}", fixture.service("web", Some(0))),
+    );
 
     fixture.config(&portainer, "unknown", &["app"]);
     let output = fixture.run(&portainer, &["deploy"]);
@@ -499,11 +536,80 @@ fn timeout() {
     let portainer = Portainer::start();
     let fixture = Fixture::new();
     fixture.config(&portainer, "local", &["app"]);
-    fixture.compose("app", &format!("services:{}", service("web", Some(60))));
+    fixture.compose(
+        "app",
+        &format!("services:{}", fixture.service("web", Some(60))),
+    );
 
     let output = fixture.run(&portainer, &["deploy", "--timeout", "3"]);
     assert_failure(
         &output,
         &format!("Timed out waiting for stack \"{}\"", fixture.name("app")),
     );
+}
+
+/// Checks that the only Portainer stack and the only compose project are the
+/// given stack, with a single running container for its service. Whether
+/// docker compose reuses or recreates the container when switching between
+/// `up` and `deploy` depends on its version so that isn't checked.
+fn assert_single_stack(portainer: &Portainer, fixture: &Fixture, stack: &str) {
+    let name = fixture.name(stack);
+
+    let stacks: Vec<Value> = portainer.stacks();
+    assert_eq!(
+        stacks.len(),
+        1,
+        "expected one Portainer stack: {:?}",
+        stacks
+    );
+    assert_eq!(stacks[0]["Name"], name);
+
+    assert_eq!(
+        portainer.compose_projects(fixture),
+        BTreeSet::from([name.clone()])
+    );
+
+    let web = portainer.container(&fixture.container(stack, "web"));
+    assert_eq!(web["State"]["Health"]["Status"], "healthy");
+}
+
+#[test]
+#[ignore = "requires docker"]
+fn up_after_deploy_modifies_stack() {
+    let portainer = Portainer::start();
+    let fixture = Fixture::new();
+    fixture.config(&portainer, "local", &["app"]);
+    fixture.compose(
+        "app",
+        &format!("services:{}", fixture.service("web", Some(0))),
+    );
+
+    assert_success(&fixture.run(&portainer, &["deploy"]));
+    assert_single_stack(&portainer, &fixture, "app");
+    let projects = portainer.compose_projects(&fixture);
+
+    assert_success(&fixture.run(&portainer, &["up"]));
+    assert_single_stack(&portainer, &fixture, "app");
+    assert_eq!(portainer.compose_projects(&fixture), projects);
+}
+
+#[test]
+#[ignore = "requires docker"]
+fn deploy_after_up_updates_stack() {
+    let portainer = Portainer::start();
+    let fixture = Fixture::new();
+    fixture.config(&portainer, "local", &["app"]);
+    fixture.compose(
+        "app",
+        &format!("services:{}", fixture.service("web", Some(0))),
+    );
+
+    assert_success(&fixture.run(&portainer, &["up"]));
+    assert!(portainer.stacks().is_empty());
+    let projects = portainer.compose_projects(&fixture);
+    assert_eq!(projects, BTreeSet::from([fixture.name("app")]));
+
+    assert_success(&fixture.run(&portainer, &["deploy"]));
+    assert_single_stack(&portainer, &fixture, "app");
+    assert_eq!(portainer.compose_projects(&fixture), projects);
 }
